@@ -163,6 +163,7 @@ exec_remote() {
         -e COVERAGE \
         -e CHECKPOINT_DISABLE \
         -e AWSVPC   \
+        -e RESOLV_CONF="$RESOLV_CONF" \
         $WEAVEEXEC_DOCKER_ARGS $EXEC_IMAGE --local "$@"
 }
 
@@ -242,6 +243,17 @@ elif [ "$1" = "env" -a "$2" = "--restore" ] ; then
     else
         echo "DOCKER_HOST=$ORIG_DOCKER_HOST"
         exit 0
+    fi
+elif [ "$1" = "launch" -a -z "$RESOLV_CONF" ] ; then
+    # Figure out the location of the actual resolv.conf file because
+    # we want to bind mount its directory into the container.
+    if [ -L /etc/resolv.conf ]; then # symlink
+        # This assumes a host with readlink...
+        # Ideally, this would resolve the symlink manually, without
+        # using host commands.
+        RESOLV_CONF=$(readlink -f /etc/resolv.conf)
+    else
+        RESOLV_CONF=/etc/resolv.conf
     fi
 fi
 
@@ -1270,16 +1282,6 @@ launch() {
            --label=weavevolumes $WEAVEDB_IMAGE >/dev/null
     fi
 
-    # Figure out the location of the actual resolv.conf file because
-    # we want to bind mount its directory into the container.
-    if [ -L ${HOST_ROOT:-/}/etc/resolv.conf ]; then # symlink
-        # This assumes a host with readlink in FHS directories...
-        # Ideally, this would resolve the symlink manually, without
-        # using host commands.
-        RESOLV_CONF=$(chroot ${HOST_ROOT:-/} readlink -f /etc/resolv.conf)
-    else
-        RESOLV_CONF=/etc/resolv.conf
-    fi
     RESOLV_CONF_DIR=$(dirname "$RESOLV_CONF")
     RESOLV_CONF_BASE=$(basename "$RESOLV_CONF")
 
