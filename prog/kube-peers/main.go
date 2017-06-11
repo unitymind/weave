@@ -60,8 +60,10 @@ func addMyselfToPeerList(c *kubernetes.Clientset, peerName, name string) (*peerL
 	if err != nil {
 		return nil, err
 	}
+	log.Println("Fetched existing peer list", list)
 	if !list.contains(peerName) {
 		list.add(peerName, name)
+		log.Println("Storing new peer list", list)
 		err = dsa.UpdatePeerList(*list)
 		if err != nil {
 			return nil, err
@@ -101,6 +103,7 @@ func main() {
 		log.Fatalf("Could not get peers: %v", err)
 	}
 	if justReclaim {
+		log.Println("Checking if any peers need to be reclaimed")
 		list, err := addMyselfToPeerList(c, peerName, nodeName)
 		if err != nil {
 			log.Fatalf("Could not get peer list: %v", err)
