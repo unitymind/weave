@@ -3,10 +3,12 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
+
+	"github.com/pkg/errors"
 
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	kubeErrors "k8s.io/client-go/pkg/api/errors"
 	"k8s.io/client-go/pkg/api/unversioned"
 	api "k8s.io/client-go/pkg/api/v1"
 )
@@ -59,15 +61,39 @@ const (
 	KubePeersAnnotationKey = "kube-peers.weave.works/peers"
 )
 
-func (cml *configMapAnnotations) GetPeerList() (*peerList, error) {
-	var record peerList
-	var err error
-	cml.cm, err = cml.Client.ConfigMaps(cml.Namespace).Get(cml.Name)
-	if err != nil {
-		return nil, err
+func (cml *configMapAnnotations) Init() error {
+	for { // Loop only if we call Create() and it's already there
+		var err error
+		cml.cm, err = cml.Client.ConfigMaps(cml.Namespace).Get(cml.Name)
+		if err != nil {
+			if !kubeErrors.IsNotFound(err) {
+				return errors.Wrapf(err, "Unable to fetch ConfigMap %s/%s", cml.Namespace, cml.Name)
+			}
+			cml.cm, err = cml.Client.ConfigMaps(cml.Namespace).Create(&api.ConfigMap{
+				ObjectMeta: api.ObjectMeta{
+					Name:      cml.Name,
+					Namespace: cml.Namespace,
+				},
+			})
+			if err != nil {
+				if kubeErrors.IsAlreadyExists(err) {
+					continue
+				}
+				return errors.Wrapf(err, "Unable to create ConfigMap %s/%s", cml.Namespace, cml.Name)
+			}
+		}
+		break
 	}
 	if cml.cm.Annotations == nil {
 		cml.cm.Annotations = make(map[string]string)
+	}
+	return nil
+}
+
+func (cml *configMapAnnotations) GetPeerList() (*peerList, error) {
+	var record peerList
+	if cml.cm == nil {
+		return nil, errors.New("endpoint not initialized, call Init first")
 	}
 	if recordBytes, found := cml.cm.Annotations[KubePeersAnnotationKey]; found {
 		if err := json.Unmarshal([]byte(recordBytes), &record); err != nil {
@@ -80,7 +106,7 @@ func (cml *configMapAnnotations) GetPeerList() (*peerList, error) {
 // Update will update and existing annotation on a given resource.
 func (cml *configMapAnnotations) UpdatePeerList(list peerList) error {
 	if cml.cm == nil {
-		return errors.New("endpoint not initialized, call get or create first")
+		return errors.New("endpoint not initialized, call Init first")
 	}
 	recordBytes, err := json.Marshal(list)
 	if err != nil {
