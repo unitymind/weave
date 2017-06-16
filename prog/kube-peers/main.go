@@ -55,8 +55,8 @@ const (
 
 // update the list of all peers that have gone through this code path
 func addMyselfToPeerList(c *kubernetes.Clientset, peerName, name string) (*peerList, error) {
-	dsa := newDaemonSetAnnotations(daemonSetNamespace, daemonSetName, c)
-	list, err := dsa.GetPeerList()
+	cml := newConfigMapAnnotations(daemonSetNamespace, daemonSetName, c)
+	list, err := cml.GetPeerList()
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func addMyselfToPeerList(c *kubernetes.Clientset, peerName, name string) (*peerL
 	if !list.contains(peerName) {
 		list.add(peerName, name)
 		log.Println("Storing new peer list", list)
-		err = dsa.UpdatePeerList(*list)
+		err = cml.UpdatePeerList(*list)
 		if err != nil {
 			return nil, err
 		}

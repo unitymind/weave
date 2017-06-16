@@ -1,3 +1,4 @@
+// Much of this copied from k8s.io/kubernetes/pkg/client/leaderelection/resourcelock/configmaplock.go
 package main
 
 import (
@@ -5,9 +6,9 @@ import (
 	"errors"
 
 	"k8s.io/client-go/kubernetes"
-	betaClient "k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/pkg/api/unversioned"
-	beta "k8s.io/client-go/pkg/apis/extensions/v1beta1"
+	api "k8s.io/client-go/pkg/api/v1"
 )
 
 type LeaderElectionRecord struct {
@@ -17,15 +18,15 @@ type LeaderElectionRecord struct {
 	RenewTime            unversioned.Time `json:"renewTime"`
 }
 
-type daemonSetAnnotations struct {
+type configMapAnnotations struct {
 	Name      string
 	Namespace string
-	Client    betaClient.DaemonSetsGetter
-	ds        *beta.DaemonSet
+	Client    corev1client.ConfigMapsGetter
+	cm        *api.ConfigMap
 }
 
-func newDaemonSetAnnotations(ns string, name string, client *kubernetes.Clientset) *daemonSetAnnotations {
-	return &daemonSetAnnotations{
+func newConfigMapAnnotations(ns string, name string, client *kubernetes.Clientset) *configMapAnnotations {
+	return &configMapAnnotations{
 		Namespace: ns,
 		Name:      name,
 		Client:    client,
@@ -58,17 +59,17 @@ const (
 	KubePeersAnnotationKey = "kube-peers.weave.works/peers"
 )
 
-func (dsa *daemonSetAnnotations) GetPeerList() (*peerList, error) {
+func (cml *configMapAnnotations) GetPeerList() (*peerList, error) {
 	var record peerList
 	var err error
-	dsa.ds, err = dsa.Client.DaemonSets(dsa.Namespace).Get(dsa.Name)
+	cml.cm, err = cml.Client.ConfigMaps(cml.Namespace).Get(cml.Name)
 	if err != nil {
 		return nil, err
 	}
-	if dsa.ds.Annotations == nil {
-		dsa.ds.Annotations = make(map[string]string)
+	if cml.cm.Annotations == nil {
+		cml.cm.Annotations = make(map[string]string)
 	}
-	if recordBytes, found := dsa.ds.Annotations[KubePeersAnnotationKey]; found {
+	if recordBytes, found := cml.cm.Annotations[KubePeersAnnotationKey]; found {
 		if err := json.Unmarshal([]byte(recordBytes), &record); err != nil {
 			return nil, err
 		}
@@ -77,15 +78,15 @@ func (dsa *daemonSetAnnotations) GetPeerList() (*peerList, error) {
 }
 
 // Update will update and existing annotation on a given resource.
-func (dsa *daemonSetAnnotations) UpdatePeerList(list peerList) error {
-	if dsa.ds == nil {
+func (cml *configMapAnnotations) UpdatePeerList(list peerList) error {
+	if cml.cm == nil {
 		return errors.New("endpoint not initialized, call get or create first")
 	}
 	recordBytes, err := json.Marshal(list)
 	if err != nil {
 		return err
 	}
-	dsa.ds.Annotations[KubePeersAnnotationKey] = string(recordBytes)
-	dsa.ds, err = dsa.Client.DaemonSets(dsa.Namespace).Update(dsa.ds)
+	cml.cm.Annotations[KubePeersAnnotationKey] = string(recordBytes)
+	cml.cm, err = cml.Client.ConfigMaps(cml.Namespace).Update(cml.cm)
 	return err
 }
