@@ -3,6 +3,8 @@ package main
 
 import (
 	"encoding/json"
+	"log"
+	"time"
 
 	"github.com/pkg/errors"
 
@@ -58,7 +60,10 @@ func (pl *peerList) add(peerName string, name string) {
 }
 
 const (
-	KubePeersAnnotationKey = "kube-peers.weave.works/peers"
+	DefaultLeaseDuration = 5 * time.Second
+
+	KubePeersAnnotationKey            = "kube-peers.weave.works/peers"
+	LeaderElectionRecordAnnotationKey = "kube-peers.weave.works/leader"
 )
 
 func (cml *configMapAnnotations) Init() error {
@@ -105,14 +110,93 @@ func (cml *configMapAnnotations) GetPeerList() (*peerList, error) {
 
 // Update will update and existing annotation on a given resource.
 func (cml *configMapAnnotations) UpdatePeerList(list peerList) error {
-	if cml.cm == nil {
-		return errors.New("endpoint not initialized, call Init first")
-	}
 	recordBytes, err := json.Marshal(list)
 	if err != nil {
 		return err
 	}
-	cml.cm.Annotations[KubePeersAnnotationKey] = string(recordBytes)
+	return cml.Update(KubePeersAnnotationKey, recordBytes)
+}
+
+func (cml *configMapAnnotations) Update(key string, recordBytes []byte) error {
+	if cml.cm == nil {
+		return errors.New("endpoint not initialized, call Init first")
+	}
+	var err error
+	for {
+		cml.cm.Annotations[key] = string(recordBytes)
+		cml.cm, err = cml.Client.ConfigMaps(cml.Namespace).Update(cml.cm)
+		if err != nil && kubeErrors.IsConflict(err) {
+			log.Printf("Optimistic locking conflict: trying again: %s", err)
+			err = cml.Init()
+			continue
+		}
+		break
+	}
+	return err
+}
+
+func (cml *configMapAnnotations) GetLockRecord() (*LeaderElectionRecord, error) {
+	var record LeaderElectionRecord
+	if cml.cm == nil {
+		return nil, errors.New("endpoint not initialized, call Init first")
+	}
+	if recordBytes, found := cml.cm.Annotations[LeaderElectionRecordAnnotationKey]; found {
+		if err := json.Unmarshal([]byte(recordBytes), &record); err != nil {
+			return nil, err
+		}
+	}
+	return &record, nil
+}
+
+func (cml *configMapAnnotations) UpdateLockRecord(le LeaderElectionRecord) error {
+	recordBytes, err := json.Marshal(le)
+	if err != nil {
+		return err
+	}
+	if cml.cm == nil {
+		return errors.New("endpoint not initialized, call Init first")
+	}
+	// Don't loop on optimistic lock failure; just assume someone else is now leader
+	cml.cm.Annotations[LeaderElectionRecordAnnotationKey] = string(recordBytes)
 	cml.cm, err = cml.Client.ConfigMaps(cml.Namespace).Update(cml.cm)
 	return err
+}
+
+// Update will update and existing annotation on a given resource.
+func (cml *configMapAnnotations) aquireOrRenewLeader(peerName string) bool {
+	now := unversioned.Now()
+	leaderElectionRecord := LeaderElectionRecord{
+		HolderIdentity:       peerName,
+		LeaseDurationSeconds: int(DefaultLeaseDuration / time.Second),
+		RenewTime:            now,
+		AcquireTime:          now,
+	}
+
+	// 1. obtain or create the ElectionRecord
+	oldLeaderElectionRecord, err := cml.GetLockRecord()
+	if err != nil {
+		log.Printf("error retrieving resource lock: %v", err)
+		return false
+	}
+	if oldLeaderElectionRecord == nil {
+		oldLeaderElectionRecord = &leaderElectionRecord
+	}
+
+	if now.Add(time.Second*time.Duration(oldLeaderElectionRecord.LeaseDurationSeconds)).After(now.Time) &&
+		oldLeaderElectionRecord.HolderIdentity != peerName {
+		log.Printf("lock is held by %v and has not yet expired", oldLeaderElectionRecord.HolderIdentity)
+		return false
+	}
+
+	// If we previously held the lock, don't update the AcquireTime
+	if oldLeaderElectionRecord.HolderIdentity == peerName {
+		leaderElectionRecord.AcquireTime = oldLeaderElectionRecord.AcquireTime
+	}
+
+	// update the lock itself
+	if err = cml.UpdateLockRecord(leaderElectionRecord); err != nil {
+		log.Printf("Failed to update lock: %v", err)
+		return false
+	}
+	return true
 }
