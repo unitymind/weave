@@ -49,13 +49,13 @@ func getKubePeers(c *kubernetes.Clientset) ([]nodeInfo, error) {
 }
 
 const (
-	daemonSetName      = "weave-net"
-	daemonSetNamespace = "kube-system"
+	configMapName      = "weave-net"
+	configMapNamespace = "kube-system"
 )
 
 // update the list of all peers that have gone through this code path
 func addMyselfToPeerList(c *kubernetes.Clientset, peerName, name string) (*peerList, error) {
-	cml := newConfigMapAnnotations(daemonSetNamespace, daemonSetName, c)
+	cml := newConfigMapAnnotations(configMapNamespace, configMapName, c)
 	if err := cml.Init(); err != nil {
 		return nil, err
 	}
